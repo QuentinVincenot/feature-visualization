@@ -36,6 +36,13 @@ class FeatureVisualizer:
     for layer in self.layers:
       print(layer)
 
+  def __configure_submodel(self, output_layer_name):
+    # Retrieve the designated layer inside the model
+    sub_layer = self.model.get_layer(output_layer_name)
+    # Create a specific submodel to make intermediate predictions and collect features maps
+    sub_model = tf.keras.Model(inputs=self.model.inputs, outputs=sub_layer.output)
+    return sub_model
+
   #--------------------------------------------------------------------------------
   #----- Convolution filters visualization
   #--------------------------------------------------------------------------------
@@ -64,6 +71,72 @@ class FeatureVisualizer:
           axs[col].set_xticks([]) ; axs[col].set_yticks([])
         else:
           axs[row, col].imshow(weights[:, :, channel_id, filter_id], cmap='gray')
+          axs[row, col].set_xticks([]) ; axs[row, col].set_yticks([])
+    plt.show()
+
+  #--------------------------------------------------------------------------------
+  #----- Layers maximization/visualization
+  #--------------------------------------------------------------------------------
+    
+  def maximize_layer(self, layer_name, iterations=10, learning_rate=10.0):
+    # Build a submodel that makes a forward pass on input data up until the designated layer
+    feature_extractor = self.__configure_submodel(layer_name)
+    # Initialize a random image as a starting point for layer maximization
+    img = (tf.random.uniform((1, 224, 224, 3)) - 0.5) * 0.25
+    # Optimize the starting random image a specific number of iterations
+    for iteration in range(iterations):
+      with tf.GradientTape() as tape:
+        # Watch the input image to later get gradients of the loss
+        tape.watch(img)
+        # Make a forward pass through the model to get the layer activation
+        activation = feature_extractor(img)
+        # Activations are cropped around borders to avoid artifacts
+        layer_activation = activation[:, 5:-5, 5:-5, :]
+        # Loss function is the mean activation over the whole layer
+        loss = tf.reduce_mean(layer_activation)
+      # Compute gradients of the loss with respect to the input random image to optimize
+      grads = tape.gradient(loss, img)
+      # Normalize the gradients
+      grads = tf.math.l2_normalize(grads)
+      # Optimize the image by adding the computed gradients
+      img += learning_rate * grads
+    # Once the input image has been optimized to maximize the designated layer, we normalize it
+    img = img.numpy()
+    img -= img.mean()
+    img /= img.std() + 1e-5
+    img *= 0.15
+    # We center back the optimized image crop
+    img = img[0, 5:-5, 5:-5, :]
+    # We clip the optimized image values in [0, 1]
+    img += 0.5
+    img = np.clip(img, 0, 1)
+    # And we finally convert back the optimized image values to RGB
+    img *= 255
+    img = np.clip(img, 0, 255).astype("uint8")
+    return img
+    
+  def visualize_all_layers(self, iterations=10, learning_rate=10.0):
+    # Retrieve all the layers names
+    all_layers_names = [layer['name'] for layer in self.layers if layer['layer_type'] == 'Conv2D']
+    # Compute the number of rows/columns depending on the number of layers
+    MAX_COLUMNS = 4
+    if len(all_layers_names) < MAX_COLUMNS:
+      nb_rows, nb_cols = 1, len(all_layers_names)
+    else:
+      nb_rows, nb_cols = len(all_layers_names) // MAX_COLUMNS, MAX_COLUMNS
+    # Display the images maximizing all the different layers
+    _, axs = plt.subplots(nb_rows, nb_cols, figsize=(nb_cols*4, nb_rows*4))
+    plt.subplots_adjust(wspace=0.05, hspace=0.05)
+    for row in range(nb_rows):
+      for col in range(nb_cols):
+        layer_id = row*MAX_COLUMNS + col
+        image_maximizing_layer = self.maximize_layer(all_layers_names[layer_id], iterations, learning_rate)
+        print(layer_id, end=' ')
+        if nb_rows == 1:
+          axs[col].imshow(image_maximizing_layer)
+          axs[col].set_xticks([]) ; axs[col].set_yticks([])
+        else:
+          axs[row, col].imshow(image_maximizing_layer)
           axs[row, col].set_xticks([]) ; axs[row, col].set_yticks([])
     plt.show()
 
